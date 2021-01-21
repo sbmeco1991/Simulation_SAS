@@ -1,0 +1,616 @@
+%let homefolder=~/EST142/data;
+libname sim3a "&homefolder";
+
+****************************************************************************
+****************************************************************************
+/* Simulate datasets from linear mixed models with a US Var-Cov Structure */
+@ Soumak Basumallik
+****************************************************************************
+****************************************************************************
+
+*********************************************
+/* Case 2.1, N = 20, Obs = 5, US Structure */
+*********************************************;
+
+%let NumIterations = 1000;  /* Number of datasets/iterations */
+%let NumSubjects = 20;   /* Number of subjects (i) */
+%let NumObs = 5;        /* Number of observations (j) */
+
+/* Under the Alternate Hypothesis */
+
+proc iml;
+ cor={1.705112 1.648259 1.710846 1.740127 1.785707,
+      1.648259 2.126242 2.135221 2.194637 2.225454,
+      1.710846 2.135221 2.534146 2.506305 2.541710,
+      1.740127 2.194637 2.506305 2.959009 2.855429,
+      1.785707 2.225454 2.541710 2.855429 3.175491};
+ mean={0 0 0 0 0};
+ N=&NumIterations*&NumSubjects;      /* NumIterations*NumSubjects */
+  call randseed(61345);
+  z=RandNormal(n,mean,cor);
+  create USErrors from z;
+  append from z;
+quit;
+
+data simulation_US;
+ call streaminit(689127);
+  do SampleID=1 to &NumIterations;
+   do i=1 to &NumSubjects; 
+     array e{5} col1-col5;
+     set USErrors;
+     if i<=(&NumSubjects/2) then Trt=0;
+     else if i>(&NumSubjects/2) then Trt=1;
+    do j=1 to &NumObs;  
+      Time=j-1;
+      Trt_Time=Trt*Time;
+      Y = 0.5 + 1*Trt + 0.5*Time + 0.5*Trt_Time + e{j};   
+     output; 
+    end; 
+  end;
+end;
+
+proc print data=simulation_US;
+ where SampleID=1000;
+run;
+
+/* Under the Null Hypothesis */
+
+proc iml;
+ cor={1.705112 1.648259 1.710846 1.740127 1.785707,
+      1.648259 2.126242 2.135221 2.194637 2.225454,
+      1.710846 2.135221 2.534146 2.506305 2.541710,
+      1.740127 2.194637 2.506305 2.959009 2.855429,
+      1.785707 2.225454 2.541710 2.855429 3.175491};
+ mean={0 0 0 0 0};
+ N=&NumIterations*&NumSubjects;      /* NumIterations*NumSubjects */
+  call randseed(61345);
+  z=RandNormal(n,mean,cor);
+  create USErrors_Null from z;
+  append from z;
+quit;
+
+data simulation_US_Null;
+ call streaminit(689127);
+  do SampleID=1 to &NumIterations;
+   do i=1 to &NumSubjects; 
+     array e{5} col1-col5;
+     set USErrors_Null;
+     if i<=(&NumSubjects/2) then Trt=0;
+     else if i>(&NumSubjects/2) then Trt=1;
+    do j=1 to &NumObs;  
+      Time=j-1;
+      Trt_Time=Trt*Time;
+      Y = 0.5 + 1*Trt + 0.5*Time + 0*Trt_Time + e{j};   
+     output; 
+    end; 
+  end;
+end;
+
+proc print data=simulation_US_Null;
+ where SampleID=1000;
+run;
+
+
+*****************
+/* MODEL FIT 1 */
+*****************
+
+************************************************************************
+************************************************************************
+/* Fitting a CS model based on the simulation obtained from Case 3.1 */
+************************************************************************
+************************************************************************;
+
+***********************************************************************
+/* Fixed Effects: Parameter Estimates, Standard Error, P-Value, Bias */
+***********************************************************************;
+
+proc mixed data=simulation_US;
+ where SampleID=500;
+ class i Trt (ref="0");
+ model y=Trt Time Trt_Time/ solution outp=MixedModel_OS;
+ repeated /type=CS subject=i;
+ ods output SolutionF=FE (keep=Effect Estimate StdErr Probt);
+ store out=MixedModel_OS; 
+run;
+
+proc sort data=MixedModel_OS;
+  by Trt i Time;
+run;
+
+options nocenter nodate nonumber nolabel;
+title1 'Figure 1: Underspecification of Correlation Structure';
+
+ods rtf file='~/EST142/data/Fig1_US.rtf' bodytitle_aux style=StatDoc;
+
+title "Underspecified Correlation Structure";
+proc sgplot data=MixedModel_OS;
+   scatter x=Time y=Y / group=Trt;
+   series x=Time y=Pred / group=i GroupLC=Trt curvelabel;
+   legenditem type=markerline name="1" / label="Treatment" lineattrs=GraphData1 markerattrs=GraphData1; 
+   legenditem type=markerline name="0" / label="Control" lineattrs=GraphData2(pattern=dash) markerattrs=GraphData2; 
+   keylegend "1" "0";
+run;
+
+ods rtf close;
+
+ods graphics off;
+ods exclude all; 
+
+proc mixed data=simulation_US;
+ by SampleID;
+ class i;
+ model y=Trt Time Trt_Time/ solution;
+ repeated /type=CS subject=i;
+ ods output SolutionF=FE (keep=Effect Estimate StdErr Probt);
+run;
+
+data FE_v2;
+ set FE;
+ if Effect="Intercept" then Bias=(0.5-Estimate);
+ else if Effect="Trt" then Bias=(1-Estimate);
+ else if Effect="Time" then Bias=(0.5-Estimate);
+ else if Effect="Trt_Time" then Bias=(0.5-Estimate);
+ if Probt <= 0.05 then P_less = 1;
+ else if Probt > 0.05 then P_less = 0;
+run;
+ 
+proc sort data=FE_v2;
+ by Effect;
+run;
+
+proc means data=FE_v2 mean;
+ var Estimate StdErr Probt Bias;
+ by Effect;
+ ods output Summary=Results (keep=Effect Estimate_Mean StdErr_Mean Probt_Mean Bias_Mean);
+run;
+
+ods output close;
+ods exclude none;
+
+/* Renaming Variables in the Result dataset */
+
+data Results_v2;
+ set Results;
+ rename Estimate_Mean = Average_Estimate;
+ rename StdErr_Mean = Average_SE;
+ rename Probt_Mean = Average_Pvalue;
+ rename Bias_Mean = Average_Bias;
+run;
+
+options nocenter nodate nonumber nolabel;
+title1 'Table 3.1';
+title2 'Results of Fixed Effects from the Simulations obtained under Case 2.1';
+title3 'Fitting the model with a CS var-cov structure';
+
+ods rtf file='~/EST142/data/Tab_3.1_CSFit_FE.rtf' bodytitle_aux style=Journal3;
+
+proc print data=Results_v2;
+run;
+
+ods rtf close;
+
+
+*******************
+/* Type II Error */
+*******************;
+
+/* In Type II error we are accepting a false Null hypothesis. Basically here we need the 
+   proportion of p-values which are more than 0.5. */
+  
+proc freq data=FE_v2;
+ tables P_less;
+ by Effect;
+ ods output OneWayFreqs=Results (keep=Effect P_less Frequency Percent);
+run;
+  
+/* Renaming Variables in the Type II dataset */
+
+data Results_v2;
+ set Results;
+ if P_less ne 1 then Type_II_Error=Percent;
+run;
+
+options nocenter nodate nonumber nolabel;
+title1 'Table 3.1';
+title2 'Type II Error';
+title3 'Fitting the model with a CS var-cov structure';
+
+ods rtf file='~/EST142/data/Tab_3.1_CSFit_Type2.rtf' bodytitle_aux style=Journal3;
+
+proc print data=Results_v2;
+run;
+
+ods rtf close;
+
+
+******************
+/* Type I Error */
+******************;
+
+/* In Type I error we are rejecting a true Null hypothesis. Basically here we need the 
+   proportion of p-values which are less than 0.5 under the Null */
+  
+/* Fitting the CS Model under the Null */
+
+ods graphics off;
+ods exclude all; 
+
+proc mixed data=simulation_US_Null;
+ by SampleID;
+ class i;
+ model y=Trt Time Trt_Time/ solution;
+ repeated /type=CS subject=i;
+ ods output SolutionF=FE_Null (keep=Effect Estimate StdErr Probt);
+run;
+
+data FE_Null_v2;
+ set FE_Null;
+ if Effect ne "Trt_Time" then delete;
+ if Probt <= 0.05 then P_less = 1;
+ else if Probt > 0.05 then P_less = 0;
+run;
+ 
+proc sort data=FE_Null_v2;
+ by Effect;
+run;
+
+proc freq data=FE_Null_v2;
+ tables P_less;
+ by Effect;
+ ods output OneWayFreqs=Results (keep=Effect P_less Frequency Percent);
+run;
+  
+ods exclude none;
+  
+/* Renaming Variables in the Type I dataset */
+
+data Results_v2;
+ set Results;
+ if P_less eq 1 then Type_I_Error=Percent;
+run;
+
+options nocenter nodate nonumber nolabel;
+title1 'Table 3.1';
+title2 'Type I Error';
+title3 'Fitting the model with a CS var-cov structure';
+
+ods rtf file='~/EST142/data/Tab_3.1_CSFit_Type1.rtf' bodytitle_aux style=Journal3;
+
+proc print data=Results_v2;
+run;
+
+ods rtf close;
+
+
+*****************
+/* MODEL FIT 2 */
+*****************
+
+***************************************************************************
+***************************************************************************
+/* Fitting a Linear model based on the simulation obtained from Case 3.1 */
+***************************************************************************
+***************************************************************************;
+
+***********************************************************************
+/* Fixed Effects: Parameter Estimates, Standard Error, P-Value, Bias */
+***********************************************************************;
+
+ods graphics off;
+ods exclude all; 
+
+proc glm data=simulation_US;
+ by SampleID;
+ class i;
+ model y=Trt Time Trt_Time/ solution;
+ ods output ParameterEstimates=FE (keep=Parameter Estimate StdErr Probt);
+run;
+
+data FE_v2;
+ set FE;
+ if Parameter="Intercept" then Bias=(0.5-Estimate);
+ else if Parameter="Trt" then Bias=(1-Estimate);
+ else if Parameter="Time" then Bias=(0.5-Estimate);
+ else if Parameter="Trt_Time" then Bias=(0.5-Estimate);
+ if Probt <= 0.05 then P_less = 1;
+ else if Probt > 0.05 then P_less = 0;
+run;
+ 
+proc sort data=FE_v2;
+ by Parameter;
+run;
+
+proc means data=FE_v2 mean;
+ var Estimate StdErr Probt Bias;
+ by Parameter;
+ ods output Summary=Results (keep=Parameter Estimate_Mean StdErr_Mean Probt_Mean Bias_Mean);
+run;
+
+ods output close;
+ods exclude none;
+
+/* Renaming Variables in the Result dataset */
+
+data Results_v2;
+ set Results;
+ rename Estimate_Mean = Average_Estimate;
+ rename StdErr_Mean = Average_SE;
+ rename Probt_Mean = Average_Pvalue;
+ rename Bias_Mean = Average_Bias;
+run;
+
+options nocenter nodate nonumber nolabel;
+title1 'Table 3.1';
+title2 'Results of Fixed Effects from the Simulations obtained under Case 3.1';
+title3 'Fitting the model with an Uncorrelated var-cov structure';
+
+ods rtf file='~/EST142/data/Tab_3.1_UNCORRFit_FE.rtf' bodytitle_aux style=Journal3;
+
+proc print data=Results_v2;
+run;
+
+ods rtf close;
+
+
+*******************
+/* Type II Error */
+*******************;
+
+/* In Type II error we are accepting a false Null hypothesis. Basically here we need the 
+   proportion of p-values which are more than 0.5. */
+  
+proc freq data=FE_v2;
+ tables P_less;
+ by Parameter;
+ ods output OneWayFreqs=Results (keep=Parameter P_less Frequency Percent);
+run;
+  
+/* Renaming Variables in the Type II dataset */
+
+data Results_v2;
+ set Results;
+ if P_less ne 1 then Type_II_Error=Percent;
+run;
+
+options nocenter nodate nonumber nolabel;
+title1 'Table 3.1';
+title2 'Type II Error';
+title3 'Fitting the model with an Uncorrelated var-cov Structure';
+
+ods rtf file='~/EST142/data/Tab_3.1_UNCORRFit_Type2.rtf' bodytitle_aux style=Journal3;
+
+proc print data=Results_v2;
+run;
+
+ods rtf close;
+
+
+******************
+/* Type I Error */
+******************;
+
+/* In Type I error we are rejecting a true Null hypothesis. Basically here we need the 
+   proportion of p-values which are less than 0.5 under the Null */
+  
+/* Fitting the Uncorrelated Model under the Null */
+
+ods graphics off;
+ods exclude all; 
+
+proc glm data=simulation_US_Null;
+ by SampleID;
+ class i;
+ model y=Trt Time Trt_Time/ solution;
+ ods output ParameterEstimates=FE_Null (keep=Parameter Estimate StdErr Probt);
+run;
+
+data FE_Null_v2;
+ set FE_Null;
+ if Parameter ne "Trt_Time" then delete;
+ if Probt <= 0.05 then P_less = 1;
+ else if Probt > 0.05 then P_less = 0;
+run;
+ 
+proc sort data=FE_Null_v2;
+ by Parameter;
+run;
+
+proc freq data=FE_Null_v2;
+ tables P_less;
+ by Parameter;
+ ods output OneWayFreqs=Results (keep=Parameter P_less Frequency Percent);
+run;
+  
+ods exclude none;
+  
+/* Renaming Variables in the Type I dataset */
+
+data Results_v2;
+ set Results;
+ if P_less eq 1 then Type_I_Error=Percent;
+run;
+
+options nocenter nodate nonumber nolabel;
+title1 'Table 3.1';
+title2 'Type I Error';
+title3 'Fitting the model with a Uncorrelated var-cov Structure';
+
+ods rtf file='~/EST142/data/Tab_3.1_UNCORRFit_Type1.rtf' bodytitle_aux style=Journal3;
+
+proc print data=Results_v2;
+run;
+
+ods rtf close;
+
+
+
+*****************
+/* MODEL FIT 3 */
+*****************
+
+************************************************************************
+************************************************************************
+/* Fitting a US model based on the simulation obtained from Case 3.1 */
+************************************************************************
+************************************************************************;
+
+***********************************************************************
+/* Fixed Effects: Parameter Estimates, Standard Error, P-Value, Bias */
+***********************************************************************;
+
+ods graphics off;
+ods exclude all; 
+
+proc mixed data=simulation_US;
+ by SampleID;
+ class i;
+ model y=Trt Time Trt_Time/ solution;
+ repeated /type=UN subject=i;
+ ods output SolutionF=FE (keep=Effect Estimate StdErr Probt);
+run;
+
+data FE_v2;
+ set FE;
+ if Effect="Intercept" then Bias=(0.5-Estimate);
+ else if Effect="Trt" then Bias=(1-Estimate);
+ else if Effect="Time" then Bias=(0.5-Estimate);
+ else if Effect="Trt_Time" then Bias=(0.5-Estimate);
+ if Probt <= 0.05 then P_less = 1;
+ else if Probt > 0.05 then P_less = 0;
+run;
+ 
+proc sort data=FE_v2;
+ by Effect;
+run;
+
+proc means data=FE_v2 mean;
+ var Estimate StdErr Probt Bias;
+ by Effect;
+ ods output Summary=Results (keep=Effect Estimate_Mean StdErr_Mean Probt_Mean Bias_Mean);
+run;
+
+ods output close;
+ods exclude none;
+
+/* Renaming Variables in the Result dataset */
+
+data Results_v2;
+ set Results;
+ rename Estimate_Mean = Average_Estimate;
+ rename StdErr_Mean = Average_SE;
+ rename Probt_Mean = Average_Pvalue;
+ rename Bias_Mean = Average_Bias;
+run;
+
+options nocenter nodate nonumber nolabel;
+title1 'Table 3.1';
+title2 'Results of Fixed Effects from the Simulations obtained under Case 3.1';
+title3 'Fitting the model with an US var-cov structure';
+
+ods rtf file='~/EST142/data/Tab_3.1_USFit_FE.rtf' bodytitle_aux style=Journal3;
+
+proc print data=Results_v2;
+run;
+
+ods rtf close;
+
+
+*******************
+/* Type II Error */
+*******************;
+
+/* In Type II error we are accepting a false Null hypothesis. Basically here we need the 
+   proportion of p-values which are more than 0.5. */
+  
+proc freq data=FE_v2;
+ tables P_less;
+ by Effect;
+ ods output OneWayFreqs=Results (keep=Effect P_less Frequency Percent);
+run;
+  
+/* Renaming Variables in the Type II dataset */
+
+data Results_v2;
+ set Results;
+ if P_less ne 1 then Type_II_Error=Percent;
+run;
+
+options nocenter nodate nonumber nolabel;
+title1 'Table 3.1';
+title2 'Type II Error';
+title3 'Fitting the model with an US var-cov structure';
+
+ods rtf file='~/EST142/data/Tab_3.1_USFit_Type2.rtf' bodytitle_aux style=Journal3;
+
+proc print data=Results_v2;
+run;
+
+ods rtf close;
+
+
+******************
+/* Type I Error */
+******************;
+
+/* In Type I error we are rejecting a true Null hypothesis. Basically here we need the 
+   proportion of p-values which are less than 0.5 under the Null */
+  
+/* Fitting the US Model under the Null */
+
+ods graphics off;
+ods exclude all; 
+
+proc mixed data=simulation_US_Null;
+ by SampleID;
+ class i;
+ model y=Trt Time Trt_Time/ solution;
+ repeated /type=UN subject=i;
+ ods output SolutionF=FE_Null (keep=Effect Estimate StdErr Probt);
+run;
+
+data FE_Null_v2;
+ set FE_Null;
+ if Effect ne "Trt_Time" then delete;
+ if Probt <= 0.05 then P_less = 1;
+ else if Probt > 0.05 then P_less = 0;
+run;
+ 
+proc sort data=FE_Null_v2;
+ by Effect;
+run;
+
+proc freq data=FE_Null_v2;
+ tables P_less;
+ by Effect;
+ ods output OneWayFreqs=Results (keep=Effect P_less Frequency Percent);
+run;
+  
+ods exclude none;
+  
+/* Renaming Variables in the Type I dataset */
+
+data Results_v2;
+ set Results;
+ if P_less eq 1 then Type_I_Error=Percent;
+run;
+
+options nocenter nodate nonumber nolabel;
+title1 'Table 3.1';
+title2 'Type I Error';
+title3 'Fitting the model with an US var-cov structure';
+
+ods rtf file='~/EST142/data/Tab_3.1_USFit_Type1.rtf' bodytitle_aux style=Journal3;
+
+proc print data=Results_v2;
+run;
+
+ods rtf close;
+
+
+
+
+
+
+
+
