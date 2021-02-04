@@ -1,6 +1,5 @@
 # Simulation_SAS
-The purpose of this project is to investigate what happens to the estimation of fixed effect parameters, the standard errors estimates of the fixed effect parameters and the Type I and Type II error for the fixed effects 
-hypothesis testing when the correlation structure is over- and under-specified.
+The purpose of this project is to investigate what happens to the estimation of fixed effect parameters, the standard error estimates of the fixed effect parameters and the Type I and Type II error for the fixed effects hypothesis testing when the correlation structure is over- and under-specified.
 
 Fitting data with over and under specified variance covariance stuctures tends to be a common problem for researchers. Hence, it is insightful to see what errors we have to deal with, if and when that happens. 
 
